@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # bin/compile <build-dir> <cache-dir> <env-dir>
 #
-# Sparrow Monorepo Buildpack
+# Sparrow Monorepo Buildpack - Flatten Approach
 #
-# STRATEGY: Copy the Gemfile to root and rewrite relative gem paths
-# so they work from root instead of from apps/api/.
-#
-# This approach:
-# - Keeps local dev unchanged (Gemfile in apps/api uses ../../packages/...)
-# - Works on Heroku (paths rewritten to packages/...)
-# - Preserves bundle caching (no .bundle/config needed)
+# STRATEGY: Extract only the Rails app and Ruby packages from the monorepo,
+# flatten everything to root level. This gives:
+# - Minimal slug size (only Ruby-related files)
+# - Clean structure (app at root, packages/ruby/* alongside)
+# - No path rewriting complexity
+# - Standard Heroku Ruby buildpack behavior
 #
 # Config vars:
 #   PROJECT_PATH - path to the app subdirectory (e.g., apps/api)
 
+set -e
 shopt -s dotglob
 
 BUILD_DIR=${1:-}
@@ -31,7 +31,7 @@ else
     PROJECT_PATH="apps/api"
 fi
 
-echo "-----> Sparrow Monorepo Buildpack"
+echo "-----> Sparrow Monorepo Buildpack (Flatten Mode)"
 echo "       PROJECT_PATH: $PROJECT_PATH" | indent
 
 # Verify the project path exists
@@ -46,73 +46,53 @@ if [ ! -f "$BUILD_DIR/$PROJECT_PATH/Gemfile" ]; then
     exit 1
 fi
 
-# Copy Gemfile to root and rewrite relative paths
-# Transform: path: '../../packages/...' -> path: 'packages/...'
-echo "       Copying Gemfile to root and rewriting relative paths..." | indent
-sed -E "s|path: ['\"]\.\./../([^'\"]+)['\"]|path: '\\1'|g" "$BUILD_DIR/$PROJECT_PATH/Gemfile" > "$BUILD_DIR/Gemfile"
+# Step 1: Stage what we need to a temp location
+echo "       Staging files to extract..." | indent
+STAGING_DIR=$(mktemp -d)
 
-# Copy Gemfile.lock to root and rewrite paths there too
-# The lockfile contains: remote: ../../packages/ruby/tnef
-echo "       Copying Gemfile.lock to root and rewriting paths..." | indent
-sed "s|remote: ../../|remote: |g" "$BUILD_DIR/$PROJECT_PATH/Gemfile.lock" > "$BUILD_DIR/Gemfile.lock"
+# Copy the Rails app contents (will become root)
+echo "       - Copying $PROJECT_PATH/* (Rails app)" | indent
+cp -r "$BUILD_DIR/$PROJECT_PATH"/* "$STAGING_DIR/"
 
-# Show what paths look like after rewriting
-echo "       Rewritten gem paths in Gemfile:" | indent
-grep -E "path:.*packages" "$BUILD_DIR/Gemfile" | head -5 | indent || echo "       (no path gems found)" | indent
-echo "       Rewritten paths in Gemfile.lock:" | indent
-grep -E "remote:.*packages" "$BUILD_DIR/Gemfile.lock" | head -5 | indent || echo "       (no path gems found)" | indent
-
-# Export for runtime via .profile.d
-export_dir="$BUILD_DIR/.profile.d"
-mkdir -p "$export_dir"
-cat > "$export_dir/monorepo.sh" << EOF
-# Set environment for runtime
-export MONOREPO_PROJECT_PATH=$PROJECT_PATH
-EOF
-echo "       Created .profile.d/monorepo.sh for runtime" | indent
-
-# Create Procfile at root if it doesn't exist
-if [ ! -f "$BUILD_DIR/Procfile" ]; then
-    echo "       Creating Procfile at root to run from $PROJECT_PATH..." | indent
-    
-    if [ -f "$BUILD_DIR/$PROJECT_PATH/Procfile" ]; then
-        while IFS=':' read -r proc_name proc_cmd || [ -n "$proc_name" ]; do
-            [[ -z "$proc_name" || "$proc_name" =~ ^[[:space:]]*# ]] && continue
-            proc_name=$(echo "$proc_name" | xargs)
-            proc_cmd=$(echo "$proc_cmd" | xargs)
-            echo "$proc_name: cd $PROJECT_PATH && $proc_cmd" >> "$BUILD_DIR/Procfile"
-        done < "$BUILD_DIR/$PROJECT_PATH/Procfile"
-        echo "       Generated root Procfile from $PROJECT_PATH/Procfile" | indent
-    else
-        cat > "$BUILD_DIR/Procfile" << EOF
-web: cd $PROJECT_PATH && bundle exec puma -C config/puma.rb
-EOF
-        echo "       Created default web Procfile" | indent
-    fi
+# Copy packages/ruby if it exists (for local gems)
+if [ -d "$BUILD_DIR/packages/ruby" ]; then
+    echo "       - Copying packages/ruby/* (local gems)" | indent
+    mkdir -p "$STAGING_DIR/packages/ruby"
+    cp -r "$BUILD_DIR/packages/ruby"/* "$STAGING_DIR/packages/ruby/"
 fi
 
-# Create bin/ shims at root so heroku run commands work
-echo "       Creating bin/ shims at root for heroku run commands..." | indent
-mkdir -p "$BUILD_DIR/bin"
+# Step 2: Clear the build directory
+echo "       Clearing build directory..." | indent
+rm -rf "$BUILD_DIR"/*
+rm -rf "$BUILD_DIR"/.[!.]* 2>/dev/null || true
 
-# Create rails shim
-cat > "$BUILD_DIR/bin/rails" << EOF
-#!/usr/bin/env bash
-cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/rails "\$@"
-EOF
-chmod +x "$BUILD_DIR/bin/rails"
+# Step 3: Copy staged files back to root
+echo "       Flattening to root..." | indent
+cp -r "$STAGING_DIR"/* "$BUILD_DIR/"
+cp -r "$STAGING_DIR"/.[!.]* "$BUILD_DIR/" 2>/dev/null || true
 
-# Create rake shim
-cat > "$BUILD_DIR/bin/rake" << EOF
-#!/usr/bin/env bash
-cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/rake "\$@"
-EOF
-chmod +x "$BUILD_DIR/bin/rake"
+# Step 4: Rewrite Gemfile paths (../../packages/ruby/X -> packages/ruby/X)
+echo "       Rewriting gem paths in Gemfile..." | indent
+if [ -f "$BUILD_DIR/Gemfile" ]; then
+    sed -i "s|path: ['\"]\.\./../\([^'\"]*\)['\"]|path: '\1'|g" "$BUILD_DIR/Gemfile"
+fi
 
-echo "       Created shims: bin/rails, bin/rake" | indent
+# Step 5: Rewrite Gemfile.lock paths
+echo "       Rewriting gem paths in Gemfile.lock..." | indent
+if [ -f "$BUILD_DIR/Gemfile.lock" ]; then
+    sed -i "s|remote: ../../|remote: |g" "$BUILD_DIR/Gemfile.lock"
+fi
 
-echo "       Build directory contents:" | indent
-ls -la "$BUILD_DIR" | head -12 | indent
+# Show what paths look like after rewriting
+echo "       Rewritten gem paths:" | indent
+grep -E "path:.*packages" "$BUILD_DIR/Gemfile" 2>/dev/null | head -5 | indent || echo "       (no path gems in Gemfile)" | indent
 
-echo "-----> Monorepo buildpack complete"
+# Clean up staging
+rm -rf "$STAGING_DIR"
+
+# Show final structure
+echo "       Final build directory:" | indent
+ls -la "$BUILD_DIR" | head -15 | indent
+
+echo "-----> Monorepo buildpack complete (flattened to root)"
 exit 0
