@@ -3,9 +3,13 @@
 #
 # Sparrow Monorepo Buildpack
 #
-# STRATEGY: Keep the monorepo structure INTACT so that relative gem paths work.
-# Instead of moving apps/api to root (which breaks ../../packages/ruby/tnef),
-# we keep everything in place and configure Bundler to find the Gemfile.
+# STRATEGY: Copy the Gemfile to root and rewrite relative gem paths
+# so they work from root instead of from apps/api/.
+#
+# This approach:
+# - Keeps local dev unchanged (Gemfile in apps/api uses ../../packages/...)
+# - Works on Heroku (paths rewritten to packages/...)
+# - Preserves bundle caching (no .bundle/config needed)
 #
 # Config vars:
 #   PROJECT_PATH - path to the app subdirectory (e.g., apps/api)
@@ -42,60 +46,42 @@ if [ ! -f "$BUILD_DIR/$PROJECT_PATH/Gemfile" ]; then
     exit 1
 fi
 
-# Symlink Gemfile and Gemfile.lock to root for heroku/ruby buildpack detection
-# The Ruby buildpack requires both files at root to detect a Ruby app
-# We use symlinks so Bundler operates on the actual files in PROJECT_PATH
-echo "       Symlinking Gemfile and Gemfile.lock to root..." | indent
-ln -sf "$PROJECT_PATH/Gemfile" "$BUILD_DIR/Gemfile"
-ln -sf "$PROJECT_PATH/Gemfile.lock" "$BUILD_DIR/Gemfile.lock"
-echo "       Created symlinks: Gemfile -> $PROJECT_PATH/Gemfile" | indent
+# Copy Gemfile.lock to root (preserves cache key)
+echo "       Copying Gemfile.lock to root..." | indent
+cp "$BUILD_DIR/$PROJECT_PATH/Gemfile.lock" "$BUILD_DIR/Gemfile.lock"
 
-# Create .bundle/config to set BUNDLE_GEMFILE for the build
-# This tells Bundler to use apps/api/Gemfile instead of the root placeholder
-mkdir -p "$BUILD_DIR/.bundle"
-cat > "$BUILD_DIR/.bundle/config" << EOF
----
-BUNDLE_GEMFILE: "$PROJECT_PATH/Gemfile"
-EOF
-echo "       Set BUNDLE_GEMFILE to $PROJECT_PATH/Gemfile" | indent
+# Copy Gemfile to root and rewrite relative paths
+# Transform: path: '../../packages/...' -> path: 'packages/...'
+# Transform: path: "../../packages/..." -> path: "packages/..."
+echo "       Copying Gemfile to root and rewriting relative paths..." | indent
+sed -E "s|path: ['\"]\.\./../([^'\"]+)['\"]|path: '\\1'|g" "$BUILD_DIR/$PROJECT_PATH/Gemfile" > "$BUILD_DIR/Gemfile"
 
-# Export BUNDLE_GEMFILE for subsequent buildpacks
+# Show what paths look like after rewriting
+echo "       Rewritten gem paths:" | indent
+grep -E "path:.*packages" "$BUILD_DIR/Gemfile" | head -5 | indent || echo "       (no path gems found)" | indent
+
+# Export for runtime via .profile.d
 export_dir="$BUILD_DIR/.profile.d"
 mkdir -p "$export_dir"
 cat > "$export_dir/monorepo.sh" << EOF
-# Set BUNDLE_GEMFILE for runtime
-export BUNDLE_GEMFILE=\$HOME/$PROJECT_PATH/Gemfile
-# Set working directory context
+# Set environment for runtime
 export MONOREPO_PROJECT_PATH=$PROJECT_PATH
 EOF
-echo "       Created .profile.d/monorepo.sh for runtime BUNDLE_GEMFILE" | indent
-
-# Also create export file for build-time env (used by subsequent buildpacks)
-mkdir -p "$BUILD_DIR/.heroku/env"
-cat > "$BUILD_DIR/.heroku/env/BUNDLE_GEMFILE.sh" << EOF
-export BUNDLE_GEMFILE="$BUILD_DIR/$PROJECT_PATH/Gemfile"
-EOF
-echo "       Created build-time BUNDLE_GEMFILE export" | indent
+echo "       Created .profile.d/monorepo.sh for runtime" | indent
 
 # Create Procfile at root if it doesn't exist
-# This ensures dynos run from the correct directory
 if [ ! -f "$BUILD_DIR/Procfile" ]; then
     echo "       Creating Procfile at root to run from $PROJECT_PATH..." | indent
     
-    # Check if there's a Procfile in the project directory to use as template
     if [ -f "$BUILD_DIR/$PROJECT_PATH/Procfile" ]; then
-        # Read the project's Procfile and wrap commands with cd
         while IFS=':' read -r proc_name proc_cmd || [ -n "$proc_name" ]; do
-            # Skip empty lines and comments
             [[ -z "$proc_name" || "$proc_name" =~ ^[[:space:]]*# ]] && continue
-            # Trim whitespace
             proc_name=$(echo "$proc_name" | xargs)
             proc_cmd=$(echo "$proc_cmd" | xargs)
             echo "$proc_name: cd $PROJECT_PATH && $proc_cmd" >> "$BUILD_DIR/Procfile"
         done < "$BUILD_DIR/$PROJECT_PATH/Procfile"
         echo "       Generated root Procfile from $PROJECT_PATH/Procfile" | indent
     else
-        # Create a basic web Procfile
         cat > "$BUILD_DIR/Procfile" << EOF
 web: cd $PROJECT_PATH && bundle exec puma -C config/puma.rb
 EOF
@@ -103,8 +89,7 @@ EOF
     fi
 fi
 
-# Create bin/ shims at root so standard heroku commands work
-# e.g., `heroku run console` will work instead of needing `heroku run 'cd apps/api && bin/rails console'`
+# Create bin/ shims at root so heroku run commands work
 echo "       Creating bin/ shims at root for heroku run commands..." | indent
 mkdir -p "$BUILD_DIR/bin"
 
@@ -122,12 +107,10 @@ cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/rake "\$@"
 EOF
 chmod +x "$BUILD_DIR/bin/rake"
 
-
 echo "       Created shims: bin/rails, bin/rake" | indent
 
-echo "       Monorepo structure preserved. Gem paths will resolve correctly." | indent
 echo "       Build directory contents:" | indent
-ls -la "$BUILD_DIR" | head -10 | indent
+ls -la "$BUILD_DIR" | head -12 | indent
 
 echo "-----> Monorepo buildpack complete"
 exit 0
