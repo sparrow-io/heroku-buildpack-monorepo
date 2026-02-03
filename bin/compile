@@ -3,9 +3,11 @@
 #
 # Sparrow Monorepo Buildpack
 #
-# STRATEGY: Keep the monorepo structure INTACT so that relative gem paths work.
-# We set BUNDLE_GEMFILE to the actual Gemfile path (not the symlink) so Bundler
-# resolves relative paths from apps/api/, not from root.
+# STRATEGY: Copy the Gemfile to root and rewrite relative gem paths
+# so they work from root instead of from apps/api/.
+#
+# The heroku/ruby buildpack ignores BUNDLE_GEMFILE and always uses
+# the Gemfile at root. So we must adjust paths in the Gemfile.
 #
 # Config vars:
 #   PROJECT_PATH - path to the app subdirectory (e.g., apps/api)
@@ -42,35 +44,26 @@ if [ ! -f "$BUILD_DIR/$PROJECT_PATH/Gemfile" ]; then
     exit 1
 fi
 
-# Symlink Gemfile and Gemfile.lock to root for heroku/ruby buildpack detection
-echo "       Symlinking Gemfile and Gemfile.lock to root..." | indent
-ln -sf "$PROJECT_PATH/Gemfile" "$BUILD_DIR/Gemfile"
-ln -sf "$PROJECT_PATH/Gemfile.lock" "$BUILD_DIR/Gemfile.lock"
-echo "       Created symlinks: Gemfile -> $PROJECT_PATH/Gemfile" | indent
+# Copy Gemfile to root and rewrite relative paths
+# The path '../../packages/ruby/X' from apps/api/ becomes 'packages/ruby/X' from root
+echo "       Copying Gemfile to root and rewriting relative paths..." | indent
+sed "s|path: '\.\./../|path: '|g" "$BUILD_DIR/$PROJECT_PATH/Gemfile" > "$BUILD_DIR/Gemfile"
+cp "$BUILD_DIR/$PROJECT_PATH/Gemfile.lock" "$BUILD_DIR/Gemfile.lock"
+echo "       Rewrote relative gem paths for root-level Gemfile" | indent
 
-# CRITICAL: Set BUNDLE_GEMFILE to the ACTUAL file path (not the symlink)
-# This ensures Bundler resolves relative gem paths from apps/api/, not from root
-# We use the buildpack's export mechanism to pass this to heroku/ruby buildpack
-export BUNDLE_GEMFILE="$BUILD_DIR/$PROJECT_PATH/Gemfile"
-echo "       Set BUNDLE_GEMFILE=$BUNDLE_GEMFILE" | indent
-
-# Export for subsequent buildpacks (heroku/ruby) during build
-mkdir -p "$BUILD_DIR/.heroku"
-echo "export BUNDLE_GEMFILE=\"\$HOME/$PROJECT_PATH/Gemfile\"" >> "$BUILD_DIR/.heroku/ruby_env"
-
-# Also export via the standard buildpack export mechanism
-echo "$BUILD_DIR/$PROJECT_PATH/Gemfile" > "$ENV_DIR/BUNDLE_GEMFILE"
-echo "       Exported BUNDLE_GEMFILE for subsequent buildpacks" | indent
+# Show what changed
+echo "       Path rewrites applied:" | indent
+grep -n "path:" "$BUILD_DIR/Gemfile" | head -5 | indent || true
 
 # Export for runtime via .profile.d
 export_dir="$BUILD_DIR/.profile.d"
 mkdir -p "$export_dir"
 cat > "$export_dir/monorepo.sh" << EOF
-# Set BUNDLE_GEMFILE for runtime - ensures relative gem paths resolve correctly
-export BUNDLE_GEMFILE=\$HOME/$PROJECT_PATH/Gemfile
+# Set environment for runtime
+export BUNDLE_GEMFILE=\$HOME/Gemfile
 export MONOREPO_PROJECT_PATH=$PROJECT_PATH
 EOF
-echo "       Created .profile.d/monorepo.sh for runtime BUNDLE_GEMFILE" | indent
+echo "       Created .profile.d/monorepo.sh for runtime" | indent
 
 # Create Procfile at root if it doesn't exist
 if [ ! -f "$BUILD_DIR/Procfile" ]; then
@@ -110,9 +103,8 @@ chmod +x "$BUILD_DIR/bin/rake"
 
 echo "       Created shims: bin/rails, bin/rake" | indent
 
-echo "       Monorepo structure preserved. Gem paths will resolve correctly." | indent
 echo "       Build directory contents:" | indent
-ls -la "$BUILD_DIR" | head -10 | indent
+ls -la "$BUILD_DIR" | head -12 | indent
 
 echo "-----> Monorepo buildpack complete"
 exit 0
