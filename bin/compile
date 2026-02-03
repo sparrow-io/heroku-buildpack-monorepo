@@ -122,14 +122,8 @@ cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/rake "\$@"
 EOF
 chmod +x "$BUILD_DIR/bin/rake"
 
-# Create bundle shim
-cat > "$BUILD_DIR/bin/bundle" << EOF
-#!/usr/bin/env bash
-cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/bundle "\$@"
-EOF
-chmod +x "$BUILD_DIR/bin/bundle"
 
-echo "       Created shims: bin/rails, bin/rake, bin/bundle" | indent
+echo "       Created shims: bin/rails, bin/rake" | indent
 
 echo "       Monorepo structure preserved. Gem paths will resolve correctly." | indent
 echo "       Build directory contents:" | indent
