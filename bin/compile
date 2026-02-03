@@ -46,19 +46,21 @@ if [ ! -f "$BUILD_DIR/$PROJECT_PATH/Gemfile" ]; then
     exit 1
 fi
 
-# Copy Gemfile.lock to root (preserves cache key)
-echo "       Copying Gemfile.lock to root..." | indent
-cp "$BUILD_DIR/$PROJECT_PATH/Gemfile.lock" "$BUILD_DIR/Gemfile.lock"
-
 # Copy Gemfile to root and rewrite relative paths
 # Transform: path: '../../packages/...' -> path: 'packages/...'
-# Transform: path: "../../packages/..." -> path: "packages/..."
 echo "       Copying Gemfile to root and rewriting relative paths..." | indent
 sed -E "s|path: ['\"]\.\./../([^'\"]+)['\"]|path: '\\1'|g" "$BUILD_DIR/$PROJECT_PATH/Gemfile" > "$BUILD_DIR/Gemfile"
 
+# Copy Gemfile.lock to root and rewrite paths there too
+# The lockfile contains: remote: ../../packages/ruby/tnef
+echo "       Copying Gemfile.lock to root and rewriting paths..." | indent
+sed "s|remote: ../../|remote: |g" "$BUILD_DIR/$PROJECT_PATH/Gemfile.lock" > "$BUILD_DIR/Gemfile.lock"
+
 # Show what paths look like after rewriting
-echo "       Rewritten gem paths:" | indent
+echo "       Rewritten gem paths in Gemfile:" | indent
 grep -E "path:.*packages" "$BUILD_DIR/Gemfile" | head -5 | indent || echo "       (no path gems found)" | indent
+echo "       Rewritten paths in Gemfile.lock:" | indent
+grep -E "remote:.*packages" "$BUILD_DIR/Gemfile.lock" | head -5 | indent || echo "       (no path gems found)" | indent
 
 # Export for runtime via .profile.d
 export_dir="$BUILD_DIR/.profile.d"
