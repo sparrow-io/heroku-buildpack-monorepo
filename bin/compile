@@ -4,8 +4,8 @@
 # Sparrow Monorepo Buildpack
 #
 # STRATEGY: Keep the monorepo structure INTACT so that relative gem paths work.
-# Instead of moving apps/api to root (which breaks ../../packages/ruby/tnef),
-# we keep everything in place and configure Bundler to find the Gemfile.
+# We set BUNDLE_GEMFILE to the actual Gemfile path (not the symlink) so Bundler
+# resolves relative paths from apps/api/, not from root.
 #
 # Config vars:
 #   PROJECT_PATH - path to the app subdirectory (e.g., apps/api)
@@ -48,22 +48,29 @@ ln -sf "$PROJECT_PATH/Gemfile" "$BUILD_DIR/Gemfile"
 ln -sf "$PROJECT_PATH/Gemfile.lock" "$BUILD_DIR/Gemfile.lock"
 echo "       Created symlinks: Gemfile -> $PROJECT_PATH/Gemfile" | indent
 
-# Export BUNDLE_GEMFILE for subsequent buildpacks via .profile.d
+# CRITICAL: Set BUNDLE_GEMFILE to the ACTUAL file path (not the symlink)
+# This ensures Bundler resolves relative gem paths from apps/api/, not from root
+# We use the buildpack's export mechanism to pass this to heroku/ruby buildpack
+export BUNDLE_GEMFILE="$BUILD_DIR/$PROJECT_PATH/Gemfile"
+echo "       Set BUNDLE_GEMFILE=$BUNDLE_GEMFILE" | indent
+
+# Export for subsequent buildpacks (heroku/ruby) during build
+mkdir -p "$BUILD_DIR/.heroku"
+echo "export BUNDLE_GEMFILE=\"\$HOME/$PROJECT_PATH/Gemfile\"" >> "$BUILD_DIR/.heroku/ruby_env"
+
+# Also export via the standard buildpack export mechanism
+echo "$BUILD_DIR/$PROJECT_PATH/Gemfile" > "$ENV_DIR/BUNDLE_GEMFILE"
+echo "       Exported BUNDLE_GEMFILE for subsequent buildpacks" | indent
+
+# Export for runtime via .profile.d
 export_dir="$BUILD_DIR/.profile.d"
 mkdir -p "$export_dir"
 cat > "$export_dir/monorepo.sh" << EOF
-# Set BUNDLE_GEMFILE for runtime
+# Set BUNDLE_GEMFILE for runtime - ensures relative gem paths resolve correctly
 export BUNDLE_GEMFILE=\$HOME/$PROJECT_PATH/Gemfile
 export MONOREPO_PROJECT_PATH=$PROJECT_PATH
 EOF
 echo "       Created .profile.d/monorepo.sh for runtime BUNDLE_GEMFILE" | indent
-
-# Create build-time BUNDLE_GEMFILE export for subsequent buildpacks
-mkdir -p "$BUILD_DIR/.heroku/env"
-cat > "$BUILD_DIR/.heroku/env/BUNDLE_GEMFILE.sh" << EOF
-export BUNDLE_GEMFILE="$BUILD_DIR/$PROJECT_PATH/Gemfile"
-EOF
-echo "       Created build-time BUNDLE_GEMFILE export" | indent
 
 # Create Procfile at root if it doesn't exist
 if [ ! -f "$BUILD_DIR/Procfile" ]; then
