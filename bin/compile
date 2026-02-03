@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# bin/compile <build-dir> <cache-dir> <env-dir>
+#
+# Sparrow Monorepo Buildpack
+#
+# STRATEGY: Keep the monorepo structure INTACT so that relative gem paths work.
+# Instead of moving apps/api to root (which breaks ../../packages/ruby/tnef),
+# we keep everything in place and configure Bundler to find the Gemfile.
+#
+# Config vars:
+#   PROJECT_PATH - path to the app subdirectory (e.g., apps/api)
+
+shopt -s dotglob
+
+BUILD_DIR=${1:-}
+CACHE_DIR=${2:-}
+ENV_DIR=${3:-}
+
+indent() {
+    sed -u 's/^/       /'
+}
+
+# Read PROJECT_PATH
+if [ -f "$ENV_DIR/PROJECT_PATH" ]; then
+    PROJECT_PATH=$(cat "$ENV_DIR/PROJECT_PATH")
+else
+    PROJECT_PATH="apps/api"
+fi
+
+echo "-----> Sparrow Monorepo Buildpack"
+echo "       PROJECT_PATH: $PROJECT_PATH" | indent
+
+# Verify the project path exists
+if [ ! -d "$BUILD_DIR/$PROJECT_PATH" ]; then
+    echo "ERROR: PROJECT_PATH '$PROJECT_PATH' does not exist in build directory" | indent
+    exit 1
+fi
+
+# Verify Gemfile exists in the project
+if [ ! -f "$BUILD_DIR/$PROJECT_PATH/Gemfile" ]; then
+    echo "ERROR: No Gemfile found in $PROJECT_PATH" | indent
+    exit 1
+fi
+
+# Create a placeholder Gemfile at root for heroku/ruby buildpack detection
+# The Ruby buildpack looks for /app/Gemfile to detect a Ruby app
+# We point it to the real Gemfile using BUNDLE_GEMFILE env var
+echo "       Creating placeholder Gemfile at root for Ruby buildpack detection..." | indent
+cat > "$BUILD_DIR/Gemfile" << 'EOF'
+# Placeholder Gemfile for Heroku Ruby buildpack detection
+# The actual Gemfile is at apps/api/Gemfile
+# BUNDLE_GEMFILE env var tells Bundler where to find it
+#
+# DO NOT ADD GEMS HERE - edit apps/api/Gemfile instead
+source 'https://rubygems.org'
+EOF
+
+# Create .bundle/config to set BUNDLE_GEMFILE for the build
+# This tells Bundler to use apps/api/Gemfile instead of the root placeholder
+mkdir -p "$BUILD_DIR/.bundle"
+cat > "$BUILD_DIR/.bundle/config" << EOF
+---
+BUNDLE_GEMFILE: "$PROJECT_PATH/Gemfile"
+EOF
+echo "       Set BUNDLE_GEMFILE to $PROJECT_PATH/Gemfile" | indent
+
+# Export BUNDLE_GEMFILE for subsequent buildpacks
+export_dir="$BUILD_DIR/.profile.d"
+mkdir -p "$export_dir"
+cat > "$export_dir/monorepo.sh" << EOF
+# Set BUNDLE_GEMFILE for runtime
+export BUNDLE_GEMFILE=\$HOME/$PROJECT_PATH/Gemfile
+# Set working directory context
+export MONOREPO_PROJECT_PATH=$PROJECT_PATH
+EOF
+echo "       Created .profile.d/monorepo.sh for runtime BUNDLE_GEMFILE" | indent
+
+# Also create export file for build-time env (used by subsequent buildpacks)
+mkdir -p "$BUILD_DIR/.heroku"
+cat > "$BUILD_DIR/.heroku/env/BUNDLE_GEMFILE.sh" << EOF
+export BUNDLE_GEMFILE="$BUILD_DIR/$PROJECT_PATH/Gemfile"
+EOF
+echo "       Created build-time BUNDLE_GEMFILE export" | indent
+
+# Create Procfile at root if it doesn't exist
+# This ensures dynos run from the correct directory
+if [ ! -f "$BUILD_DIR/Procfile" ]; then
+    echo "       Creating Procfile at root to run from $PROJECT_PATH..." | indent
+    
+    # Check if there's a Procfile in the project directory to use as template
+    if [ -f "$BUILD_DIR/$PROJECT_PATH/Procfile" ]; then
+        # Read the project's Procfile and wrap commands with cd
+        while IFS=':' read -r proc_name proc_cmd || [ -n "$proc_name" ]; do
+            # Skip empty lines and comments
+            [[ -z "$proc_name" || "$proc_name" =~ ^[[:space:]]*# ]] && continue
+            # Trim whitespace
+            proc_name=$(echo "$proc_name" | xargs)
+            proc_cmd=$(echo "$proc_cmd" | xargs)
+            echo "$proc_name: cd $PROJECT_PATH && $proc_cmd" >> "$BUILD_DIR/Procfile"
+        done < "$BUILD_DIR/$PROJECT_PATH/Procfile"
+        echo "       Generated root Procfile from $PROJECT_PATH/Procfile" | indent
+    else
+        # Create a basic web Procfile
+        cat > "$BUILD_DIR/Procfile" << EOF
+web: cd $PROJECT_PATH && bundle exec puma -C config/puma.rb
+EOF
+        echo "       Created default web Procfile" | indent
+    fi
+fi
+
+echo "       Monorepo structure preserved. Gem paths will resolve correctly." | indent
+echo "       Build directory contents:" | indent
+ls -la "$BUILD_DIR" | head -10 | indent
+
+echo "-----> Monorepo buildpack complete"
+exit 0

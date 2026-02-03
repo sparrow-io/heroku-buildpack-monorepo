@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+
+# This buildpack detects monorepo apps by checking for APP_BASE config var
+# The actual check happens in compile - detect always passes if this buildpack is explicitly added
+
+echo "Monorepo"
+exit 0
