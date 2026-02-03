@@ -59,11 +59,6 @@ if [ -d "$BUILD_DIR/packages/ruby" ]; then
     echo "       - Copying packages/ruby/* (local gems)" | indent
     mkdir -p "$STAGING_DIR/packages/ruby"
     cp -r "$BUILD_DIR/packages/ruby"/* "$STAGING_DIR/packages/ruby/"
-    
-    # Clean up spec directories from local gems to reduce slug size
-    echo "       - Removing spec directories from local gems" | indent
-    rm -rf "$STAGING_DIR/packages/ruby"/*/spec 2>/dev/null || true
-    rm -rf "$STAGING_DIR/packages/ruby"/*/test 2>/dev/null || true
 fi
 
 # Step 2: Clear the build directory
