@@ -50,8 +50,6 @@ ln -sf "$PROJECT_PATH/Gemfile" "$BUILD_DIR/Gemfile"
 ln -sf "$PROJECT_PATH/Gemfile.lock" "$BUILD_DIR/Gemfile.lock"
 echo "       Created symlinks: Gemfile -> $PROJECT_PATH/Gemfile" | indent
 
-EOF
-echo "       Set BUNDLE_GEMFILE to $PROJECT_PATH/Gemfile" | indent
 
 # Export BUNDLE_GEMFILE for subsequent buildpacks
 export_dir="$BUILD_DIR/.profile.d"
@@ -61,14 +59,12 @@ cat > "$export_dir/monorepo.sh" << EOF
 export BUNDLE_GEMFILE=\$HOME/$PROJECT_PATH/Gemfile
 # Set working directory context
 export MONOREPO_PROJECT_PATH=$PROJECT_PATH
-EOF
 echo "       Created .profile.d/monorepo.sh for runtime BUNDLE_GEMFILE" | indent
 
 # Also create export file for build-time env (used by subsequent buildpacks)
 mkdir -p "$BUILD_DIR/.heroku/env"
 cat > "$BUILD_DIR/.heroku/env/BUNDLE_GEMFILE.sh" << EOF
 export BUNDLE_GEMFILE="$BUILD_DIR/$PROJECT_PATH/Gemfile"
-EOF
 echo "       Created build-time BUNDLE_GEMFILE export" | indent
 
 # Create Procfile at root if it doesn't exist
@@ -92,7 +88,6 @@ if [ ! -f "$BUILD_DIR/Procfile" ]; then
         # Create a basic web Procfile
         cat > "$BUILD_DIR/Procfile" << EOF
 web: cd $PROJECT_PATH && bundle exec puma -C config/puma.rb
-EOF
         echo "       Created default web Procfile" | indent
     fi
 fi
@@ -106,14 +101,12 @@ mkdir -p "$BUILD_DIR/bin"
 cat > "$BUILD_DIR/bin/rails" << EOF
 #!/usr/bin/env bash
 cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/rails "\$@"
-EOF
 chmod +x "$BUILD_DIR/bin/rails"
 
 # Create rake shim
 cat > "$BUILD_DIR/bin/rake" << EOF
 #!/usr/bin/env bash
 cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/rake "\$@"
-EOF
 chmod +x "$BUILD_DIR/bin/rake"
 
 
