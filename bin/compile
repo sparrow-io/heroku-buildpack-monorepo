@@ -50,12 +50,6 @@ ln -sf "$PROJECT_PATH/Gemfile" "$BUILD_DIR/Gemfile"
 ln -sf "$PROJECT_PATH/Gemfile.lock" "$BUILD_DIR/Gemfile.lock"
 echo "       Created symlinks: Gemfile -> $PROJECT_PATH/Gemfile" | indent
 
-# Create .bundle/config to set BUNDLE_GEMFILE for the build
-# This tells Bundler to use apps/api/Gemfile instead of the root placeholder
-mkdir -p "$BUILD_DIR/.bundle"
-cat > "$BUILD_DIR/.bundle/config" << EOF
----
-BUNDLE_GEMFILE: "$PROJECT_PATH/Gemfile"
 EOF
 echo "       Set BUNDLE_GEMFILE to $PROJECT_PATH/Gemfile" | indent
 
