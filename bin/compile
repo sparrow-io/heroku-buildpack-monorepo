@@ -103,6 +103,34 @@ EOF
     fi
 fi
 
+# Create bin/ shims at root so standard heroku commands work
+# e.g., `heroku run console` will work instead of needing `heroku run 'cd apps/api && bin/rails console'`
+echo "       Creating bin/ shims at root for heroku run commands..." | indent
+mkdir -p "$BUILD_DIR/bin"
+
+# Create rails shim
+cat > "$BUILD_DIR/bin/rails" << EOF
+#!/usr/bin/env bash
+cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/rails "\$@"
+EOF
+chmod +x "$BUILD_DIR/bin/rails"
+
+# Create rake shim
+cat > "$BUILD_DIR/bin/rake" << EOF
+#!/usr/bin/env bash
+cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/rake "\$@"
+EOF
+chmod +x "$BUILD_DIR/bin/rake"
+
+# Create bundle shim
+cat > "$BUILD_DIR/bin/bundle" << EOF
+#!/usr/bin/env bash
+cd "\$(dirname "\$0")/../$PROJECT_PATH" && exec bin/bundle "\$@"
+EOF
+chmod +x "$BUILD_DIR/bin/bundle"
+
+echo "       Created shims: bin/rails, bin/rake, bin/bundle" | indent
+
 echo "       Monorepo structure preserved. Gem paths will resolve correctly." | indent
 echo "       Build directory contents:" | indent
 ls -la "$BUILD_DIR" | head -10 | indent
